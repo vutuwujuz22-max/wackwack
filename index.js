@@ -11,46 +11,43 @@ const CONFIG = {
 
 (async () => {
     const downloadPath = path.resolve(__dirname, 'downloads');
-    
-    if (!fs.existsSync(downloadPath)) {
-        fs.mkdirSync(downloadPath);
-    } else {
-        fs.readdirSync(downloadPath).forEach(f => {
-            try { fs.unlinkSync(path.join(downloadPath, f)); } catch(e) {}
-        });
-    }
+    if (!fs.existsSync(downloadPath)) { fs.mkdirSync(downloadPath); }
+    else { fs.readdirSync(downloadPath).forEach(f => { try { fs.unlinkSync(path.join(downloadPath, f)); } catch(e) {} }); }
 
     const browser = await puppeteer.launch({
         headless: "new",
         executablePath: '/usr/bin/google-chrome',
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1920,1080']
     });
 
     const page = await browser.newPage();
-    
-    // ==========================================
-    // حل مشكلة التعليق: اصطياد تنبيهات بوسطة
-    // ==========================================
+    await page.setViewport({ width: 1920, height: 1080 });
+
+    // =====================================================
+    // 🚨 أجهزة التصنت على موقع بوسطة (صياد الأخطاء الداخلي)
+    // =====================================================
+    page.on('console', msg => {
+        if(msg.type() === 'error' || msg.type() === 'warning') 
+            console.log('💻 [رسالة من داخل بوسطة]:', msg.text());
+    });
+    page.on('pageerror', err => console.log('❌ [عطل جافاسكريبت في بوسطة]:', err.message));
     page.on('dialog', async dialog => {
-        console.log('⚠️ تنبيه من بوسطة:', dialog.message());
-        await dialog.accept(); 
+        console.log('⚠️ [رسالة منبثقة/Alert]:', dialog.message());
+        await dialog.accept();
     });
 
     const client = await page.target().createCDPSession();
-    await client.send('Page.setDownloadBehavior', {
-        behavior: 'allow',
-        downloadPath: downloadPath
-    });
+    await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
 
     try {
-        console.log('1. Logging into Bosat...');
+        console.log('1. فتح بوسطة وتسجيل الدخول...');
         await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle2' });
-        
         await page.type('input[type="text"]', CONFIG.user);
         await page.type('input[type="password"]', CONFIG.pass);
         await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
+        console.log('✅ تم تسجيل الدخول.');
 
-        console.log(`2. Searching for client: ${CONFIG.clientName}`);
+        console.log(`2. البحث عن العميل: ${CONFIG.clientName}`);
         await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
         
         await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Lnkpopclient')?.click());
@@ -58,40 +55,61 @@ const CONFIG = {
         await page.type('#ArMainContent_UcFollowUpOrdersReport_TxtSearchClient', CONFIG.clientName);
         await new Promise(r => setTimeout(r, 3000));
         
-        await page.evaluate(() => {
+        const clientSelected = await page.evaluate(() => {
             const firstClient = document.querySelector('a[id*="LnkSetClient"]');
-            if (firstClient) firstClient.click();
+            if (firstClient) { firstClient.click(); return true; }
+            return false;
         });
+        console.log(clientSelected ? '✅ تم الضغط على العميل في البحث.' : '❌ عطل: لم يتم العثور على العميل!');
         await new Promise(r => setTimeout(r, 2000));
 
-        console.log('3. Setting Date Range...');
+        console.log('3. إدخال التواريخ (من الشهر الماضي لليوم)...');
         const today = new Date();
         const endDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
         const lastMonth = new Date();
         lastMonth.setMonth(lastMonth.getMonth() - 1);
         const startDate = `${String(lastMonth.getDate()).padStart(2, '0')}/${String(lastMonth.getMonth() + 1).padStart(2, '0')}/${lastMonth.getFullYear()}`;
 
-        await page.evaluate((start, end) => {
+        const datesEntered = await page.evaluate((start, end) => {
             const fromInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_From_Date');
             const toInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_To_Date');
             if(fromInput && toInput) {
-                fromInput.value = start;
-                fromInput.dispatchEvent(new Event('change', { bubbles: true }));
-                toInput.value = end;
-                toInput.dispatchEvent(new Event('change', { bubbles: true }));
+                fromInput.value = start; fromInput.dispatchEvent(new Event('change', { bubbles: true }));
+                toInput.value = end; toInput.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
             }
+            return false;
         }, startDate, endDate);
+        console.log(datesEntered ? '✅ تم كتابة التواريخ.' : '❌ عطل: خانات التاريخ غير موجودة!');
         await new Promise(r => setTimeout(r, 1500));
 
-        console.log('4. Generating report and downloading...');
-        await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs')?.click());
-        await new Promise(r => setTimeout(r, 8000)); 
-
-        await page.evaluate(() => {
-            try { printFunc('FollowUpOrdersXlsRep'); } catch(e) {}
+        console.log('4. الضغط على "إظهار النتائج"...');
+        const execClicked = await page.evaluate(() => {
+            const btn = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs');
+            if (btn) { btn.click(); return true; }
+            return false;
         });
+        console.log(execClicked ? '✅ تم الضغط، انتظار 10 ثواني لتحميل الجدول...' : '❌ عطل: زر إظهار النتائج غير موجود!');
+        await new Promise(r => setTimeout(r, 10000));
 
-        // زيادة وقت انتظار التحميل لـ 90 ثانية 
+        // فحص هل الموقع أظهر رسالة "لا توجد بيانات"
+        const noData = await page.evaluate(() => {
+            const text = document.body.innerText;
+            return text.includes('لا توجد بيانات') || text.includes('No records') || text.includes('لا يوجد');
+        });
+        if (noData) console.log('⚠️ تحذير: الموقع مكتوب فيه "لا توجد بيانات" لهذا العميل في هذه الفترة!');
+
+        console.log('5. فحص وتشغيل دالة التحميل (printFunc)...');
+        const printResult = await page.evaluate(() => {
+            if (typeof printFunc === 'function') {
+                try { printFunc('FollowUpOrdersXlsRep'); return '✅ دالة التحميل موجودة وتم تشغيلها.'; }
+                catch(e) { return '❌ الدالة موجودة لكن ضربت خطأ: ' + e.message; }
+            } else {
+                return '❌ الدالة printFunc مش موجودة أصلاً في الصفحة (الموقع اتحدث)!';
+            }
+        });
+        console.log('نتيجة الفحص:', printResult);
+
         let downloadedFile = null;
         for (let i = 0; i < 45; i++) {
             const files = fs.readdirSync(downloadPath);
@@ -100,40 +118,33 @@ const CONFIG = {
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (!downloadedFile) throw new Error('Download failed or took too long. تأكد أن العميل له أوردرات في هذا التاريخ.');
-        const fullFilePath = path.join(downloadPath, downloadedFile);
-        console.log(`✅ File ready: ${downloadedFile}`);
+        if (!downloadedFile) throw new Error('التحميل لم يبدأ أو فشل. راجع الـ Logs فوق لمعرفة السبب الحقيقي.');
+        console.log(`✅ تم التقاط الملف بنجاح: ${downloadedFile}`);
 
-        console.log('5. Navigating to upload site...');
+        console.log('6. الذهاب لموقع SELLZA للرفع...');
         await page.goto(CONFIG.uploadUrl, { waitUntil: 'networkidle2' });
-        
         await new Promise(r => setTimeout(r, 5000)); 
 
-        console.log('6. Searching for Google iframe...');
         let targetFrame = null;
         for (const frame of page.frames()) {
-            if (await frame.$('#fileInput')) {
-                targetFrame = frame;
-                break;
-            }
+            if (await frame.$('#fileInput')) { targetFrame = frame; break; }
         }
 
-        if (!targetFrame) throw new Error("لم يتم العثور على إطار الرفع الخاص بجوجل.");
+        if (!targetFrame) throw new Error("❌ لم يتم العثور على إطار الرفع (iframe).");
 
-        console.log('7. Uploading file...');
+        console.log('7. رفع الملف...');
         await targetFrame.waitForSelector('#fileInput', { timeout: 15000 });
         const fileInput = await targetFrame.$('#fileInput');
-        await fileInput.uploadFile(fullFilePath);
-        
+        await fileInput.uploadFile(path.join(downloadPath, downloadedFile));
         await targetFrame.click('#btnUpload');
         
-        console.log('8. Waiting for processing (10 seconds)...');
+        console.log('8. انتظار المعالجة...');
         await new Promise(r => setTimeout(r, 10000));
-
-        console.log('✅ Operation Completed Successfully!');
+        console.log('✅ اكتملت العملية بنجاح الصاروخ!');
 
     } catch (error) {
-        console.error('❌ Error occurred:', error.message);
+        console.error('\n🔴🔴🔴 [التقرير النهائي للعطل] 🔴🔴🔴');
+        console.error(error.message);
         process.exit(1);
     } finally {
         await browser.close();
