@@ -2,75 +2,111 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 
-// استدعاء البيانات المخفية من جيت هاب
+// جلب البيانات الحساسة من GitHub Secrets لضمان الأمان
 const CONFIG = {
     user: process.env.BOSAT_USER,
     pass: process.env.BOSAT_PASS,
-    uploadUrl: process.env.UPLOAD_URL,
-    targetClient: process.env.CLIENT_NAME || 'العميل الجديد' // افتراضي إذا نسيته
+    clientName: process.env.CLIENT_NAME, // اسم العميل الذي تريد البحث عنه
+    uploadUrl: process.env.UPLOAD_URL     // رابط موقع الرفع (جوجل سكريبت)
 };
 
 (async () => {
     const downloadPath = path.resolve(__dirname, 'downloads');
-    if (!fs.existsSync(downloadPath)) fs.mkdirSync(downloadPath);
+    
+    // 1. تنظيف وتجهيز مجلد التحميلات
+    if (!fs.existsSync(downloadPath)) {
+        fs.mkdirSync(downloadPath);
+    } else {
+        fs.readdirSync(downloadPath).forEach(f => {
+            try { fs.unlinkSync(path.join(downloadPath, f)); } catch(e) {}
+        });
+    }
 
+    // 2. تشغيل المتصفح بإعدادات سيرفر جيت هاب
     const browser = await puppeteer.launch({
-        headless: true,
+        headless: "new",
         executablePath: '/usr/bin/google-chrome',
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const page = await browser.newPage();
+
+    // ضبط سلوك التحميل ليتم حفظ الملف في المجلد الذي أنشأناه
     const client = await page.target().createCDPSession();
-    await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
+    await client.send('Page.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: downloadPath
+    });
 
     try {
-        console.log('🚀 بدء العملية - الدخول لبوسطة...');
+        // --- المرحلة الأولى: الدخول لموقع بوسطة واستخراج التقرير ---
+        console.log('Logging into Bosat...');
         await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle2' });
-
-        // تسجيل الدخول باستخدام السرية
+        
         await page.type('input[type="text"]', CONFIG.user);
         await page.type('input[type="password"]', CONFIG.pass);
         await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
 
-        console.log(`🔍 البحث عن العميل: ${CONFIG.targetClient}`);
+        console.log(`Searching for client: ${CONFIG.clientName}`);
         await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
         
-        // كود البحث عن العميل الجديد
+        // فتح قائمة العملاء والبحث
         await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Lnkpopclient')?.click());
         await new Promise(r => setTimeout(r, 2000));
-        await page.type('#ArMainContent_UcFollowUpOrdersReport_TxtSearchClient', CONFIG.targetClient);
+        await page.type('#ArMainContent_UcFollowUpOrdersReport_TxtSearchClient', CONFIG.clientName);
         await new Promise(r => setTimeout(r, 3000));
         
-        // اختيار أول نتيجة تظهر للعميل الجديد
+        // اختيار العميل (أول نتيجة تظهر)
         await page.evaluate(() => {
-            const firstResult = document.querySelector('a[id*="LnkSetClient"]');
-            if (firstResult) firstResult.click();
+            const firstClient = document.querySelector('a[id*="LnkSetClient"]');
+            if (firstClient) firstClient.click();
+        });
+        await new Promise(r => setTimeout(r, 2000));
+
+        // الضغط على إظهار النتائج وتحميل الإكسيل
+        console.log('Generating report and downloading...');
+        await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs')?.click());
+        await new Promise(r => setTimeout(r, 8000)); // انتظار التحميل في الجدول
+
+        // تنفيذ كود التحميل (printFunc هو المعتمد في بوسطة)
+        await page.evaluate(() => {
+            try { printFunc('FollowUpOrdersXlsRep'); } catch(e) {}
         });
 
-        // استكمال خطوات التاريخ والتحميل (نفس الكود السابق)
-        // ... (هنا تضع كود استخراج التواريخ والتحميل الذي شرحناه سابقاً) ...
-
-        console.log('📤 الرفع للموقع الجديد (بدون باسورد)...');
-        await page.goto(CONFIG.uploadUrl, { waitUntil: 'networkidle2' });
-        
-        // البحث عن حقل الرفع مباشرة
-        const fileInput = await page.$('input[type="file"]'); 
-        if (fileInput) {
+        // انتظار اكتمال التحميل على السيرفر
+        let downloadedFile = null;
+        for (let i = 0; i < 30; i++) {
             const files = fs.readdirSync(downloadPath);
-            const targetFile = files.find(f => f.endsWith('.xls') || f.endsWith('.xlsx'));
-            await fileInput.uploadFile(path.join(downloadPath, targetFile));
-            
-            // الضغط على زر الإرسال (تأكد من الـ Selector في الموقع الجديد)
-            await page.evaluate(() => {
-                const submitBtn = document.querySelector('button[type="submit"]') || document.querySelector('#uploadBtn');
-                if (submitBtn) submitBtn.click();
-            });
-            console.log('✅ تم الرفع بنجاح!');
+            downloadedFile = files.find(f => (f.endsWith('.xls') || f.endsWith('.xlsx')) && !f.endsWith('.crdownload'));
+            if (downloadedFile) break;
+            await new Promise(r => setTimeout(r, 2000));
         }
 
+        if (!downloadedFile) throw new Error('Download failed or took too long.');
+        const fullFilePath = path.join(downloadPath, downloadedFile);
+        console.log(`✅ File ready: ${downloadedFile}`);
+
+        // --- المرحلة الثانية: الرفع للموقع الجديد (SELLZA) ---
+        console.log('Navigating to upload site...');
+        await page.goto(CONFIG.uploadUrl, { waitUntil: 'networkidle2' });
+        
+        // انتظار ظهور حقل الملف (id="fileInput" كما في الكود الخاص بك)
+        await page.waitForSelector('#fileInput', { timeout: 15000 });
+        
+        console.log('Uploading file...');
+        const fileInput = await page.$('#fileInput');
+        await fileInput.uploadFile(fullFilePath);
+        
+        // الضغط على زر بدء الرفع (id="btnUpload")
+        await page.click('#btnUpload');
+        
+        console.log('Waiting for processing (10 seconds)...');
+        await new Promise(r => setTimeout(r, 10000));
+
+        console.log('✅ Operation Completed Successfully!');
+
     } catch (error) {
-        console.error('❌ حدث خطأ:', error.message);
+        console.error('❌ Error occurred:', error.message);
         process.exit(1);
     } finally {
         await browser.close();
