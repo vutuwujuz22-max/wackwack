@@ -2,18 +2,16 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 
-// جلب البيانات الحساسة من GitHub Secrets لضمان الأمان
 const CONFIG = {
     user: process.env.BOSAT_USER,
     pass: process.env.BOSAT_PASS,
-    clientName: process.env.CLIENT_NAME, // اسم العميل الذي تريد البحث عنه
-    uploadUrl: process.env.UPLOAD_URL     // رابط موقع الرفع (جوجل سكريبت)
+    clientName: process.env.CLIENT_NAME, 
+    uploadUrl: process.env.UPLOAD_URL     
 };
 
 (async () => {
     const downloadPath = path.resolve(__dirname, 'downloads');
     
-    // 1. تنظيف وتجهيز مجلد التحميلات
     if (!fs.existsSync(downloadPath)) {
         fs.mkdirSync(downloadPath);
     } else {
@@ -22,7 +20,6 @@ const CONFIG = {
         });
     }
 
-    // 2. تشغيل المتصفح بإعدادات سيرفر جيت هاب
     const browser = await puppeteer.launch({
         headless: "new",
         executablePath: '/usr/bin/google-chrome',
@@ -30,8 +27,6 @@ const CONFIG = {
     });
 
     const page = await browser.newPage();
-
-    // ضبط سلوك التحميل ليتم حفظ الملف في المجلد الذي أنشأناه
     const client = await page.target().createCDPSession();
     await client.send('Page.setDownloadBehavior', {
         behavior: 'allow',
@@ -39,9 +34,6 @@ const CONFIG = {
     });
 
     try {
-        // =========================================================
-        // المرحلة الأولى: الدخول لموقع بوسطة واستخراج التقرير
-        // =========================================================
         console.log('1. Logging into Bosat...');
         await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle2' });
         
@@ -52,30 +44,48 @@ const CONFIG = {
         console.log(`2. Searching for client: ${CONFIG.clientName}`);
         await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
         
-        // فتح قائمة العملاء والبحث
         await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Lnkpopclient')?.click());
         await new Promise(r => setTimeout(r, 2000));
         await page.type('#ArMainContent_UcFollowUpOrdersReport_TxtSearchClient', CONFIG.clientName);
         await new Promise(r => setTimeout(r, 3000));
         
-        // اختيار العميل (أول نتيجة تظهر)
         await page.evaluate(() => {
             const firstClient = document.querySelector('a[id*="LnkSetClient"]');
             if (firstClient) firstClient.click();
         });
         await new Promise(r => setTimeout(r, 2000));
 
-        // الضغط على إظهار النتائج وتحميل الإكسيل
-        console.log('3. Generating report and downloading...');
-        await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs')?.click());
-        await new Promise(r => setTimeout(r, 8000)); // انتظار التحميل في الجدول
+        // ==========================================
+        // الجزء الذي تمت إضافته: إدخال التواريخ
+        // ==========================================
+        console.log('3. Setting Date Range...');
+        const today = new Date();
+        const endDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+        const lastMonth = new Date();
+        lastMonth.setMonth(lastMonth.getMonth() - 1);
+        const startDate = `${String(lastMonth.getDate()).padStart(2, '0')}/${String(lastMonth.getMonth() + 1).padStart(2, '0')}/${lastMonth.getFullYear()}`;
 
-        // تنفيذ كود التحميل (printFunc هو المعتمد في بوسطة)
+        await page.evaluate((start, end) => {
+            const fromInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_From_Date');
+            const toInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_To_Date');
+            if(fromInput && toInput) {
+                fromInput.value = start;
+                fromInput.dispatchEvent(new Event('change', { bubbles: true }));
+                toInput.value = end;
+                toInput.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }, startDate, endDate);
+        await new Promise(r => setTimeout(r, 1500));
+        // ==========================================
+
+        console.log('4. Generating report and downloading...');
+        await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs')?.click());
+        await new Promise(r => setTimeout(r, 8000)); 
+
         await page.evaluate(() => {
             try { printFunc('FollowUpOrdersXlsRep'); } catch(e) {}
         });
 
-        // انتظار اكتمال التحميل على السيرفر
         let downloadedFile = null;
         for (let i = 0; i < 30; i++) {
             const files = fs.readdirSync(downloadPath);
@@ -88,19 +98,14 @@ const CONFIG = {
         const fullFilePath = path.join(downloadPath, downloadedFile);
         console.log(`✅ File ready: ${downloadedFile}`);
 
-        // =========================================================
-        // المرحلة الثانية: الرفع للموقع الجديد (SELLZA) - متضمنة حل الإطار
-        // =========================================================
-        console.log('4. Navigating to upload site (SELLZA)...');
+        console.log('5. Navigating to upload site...');
         await page.goto(CONFIG.uploadUrl, { waitUntil: 'networkidle2' });
         
-        // استراحة بسيطة للسماح لجوجل بتحميل الإطار المخفي
         await new Promise(r => setTimeout(r, 5000)); 
 
-        console.log('5. Searching for Google iframe...');
+        console.log('6. Searching for Google iframe...');
         let targetFrame = null;
         for (const frame of page.frames()) {
-            // البحث عن الإطار الذي يحتوي على زر الرفع
             if (await frame.$('#fileInput')) {
                 targetFrame = frame;
                 break;
@@ -109,16 +114,14 @@ const CONFIG = {
 
         if (!targetFrame) throw new Error("لم يتم العثور على إطار الرفع الخاص بجوجل.");
 
-        console.log('6. Uploading file...');
-        // التعامل مع الإطار مباشرة
+        console.log('7. Uploading file...');
         await targetFrame.waitForSelector('#fileInput', { timeout: 15000 });
         const fileInput = await targetFrame.$('#fileInput');
         await fileInput.uploadFile(fullFilePath);
         
-        // الضغط على زر بدء الرفع
         await targetFrame.click('#btnUpload');
         
-        console.log('7. Waiting for processing (10 seconds)...');
+        console.log('8. Waiting for processing (10 seconds)...');
         await new Promise(r => setTimeout(r, 10000));
 
         console.log('✅ Operation Completed Successfully!');
