@@ -2,14 +2,15 @@ name: Dynamic Bosa Bot
 on:
   workflow_dispatch: 
   schedule:
-    - cron: '0 12 * * *' # يعمل مرة واحدة ظهراً كمثال
+    # يعمل الساعة 8 صباحاً بتوقيت جرينتش (UTC) وهو ما يعادل 10 صباحاً بتوقيت مصر
+    - cron: '0 8 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
 
@@ -17,7 +18,7 @@ jobs:
         run: PUPPETEER_SKIP_DOWNLOAD=true npm install
 
       - name: Execute Bot
-        # هنا يتم ربط الأسرار بالسكربت
+        # ربط الأسرار بالسكربت أثناء التشغيل
         env:
           BOSAT_USER: ${{ secrets.BOSAT_USER }}
           BOSAT_PASS: ${{ secrets.BOSAT_PASS }}
