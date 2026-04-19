@@ -39,15 +39,17 @@ const CONFIG = {
     });
 
     try {
-        // --- المرحلة الأولى: الدخول لموقع بوسطة واستخراج التقرير ---
-        console.log('Logging into Bosat...');
+        // =========================================================
+        // المرحلة الأولى: الدخول لموقع بوسطة واستخراج التقرير
+        // =========================================================
+        console.log('1. Logging into Bosat...');
         await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle2' });
         
         await page.type('input[type="text"]', CONFIG.user);
         await page.type('input[type="password"]', CONFIG.pass);
         await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
 
-        console.log(`Searching for client: ${CONFIG.clientName}`);
+        console.log(`2. Searching for client: ${CONFIG.clientName}`);
         await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
         
         // فتح قائمة العملاء والبحث
@@ -64,7 +66,7 @@ const CONFIG = {
         await new Promise(r => setTimeout(r, 2000));
 
         // الضغط على إظهار النتائج وتحميل الإكسيل
-        console.log('Generating report and downloading...');
+        console.log('3. Generating report and downloading...');
         await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs')?.click());
         await new Promise(r => setTimeout(r, 8000)); // انتظار التحميل في الجدول
 
@@ -86,21 +88,37 @@ const CONFIG = {
         const fullFilePath = path.join(downloadPath, downloadedFile);
         console.log(`✅ File ready: ${downloadedFile}`);
 
-        // --- المرحلة الثانية: الرفع للموقع الجديد (SELLZA) ---
-        console.log('Navigating to upload site...');
+        // =========================================================
+        // المرحلة الثانية: الرفع للموقع الجديد (SELLZA) - متضمنة حل الإطار
+        // =========================================================
+        console.log('4. Navigating to upload site (SELLZA)...');
         await page.goto(CONFIG.uploadUrl, { waitUntil: 'networkidle2' });
         
-        // انتظار ظهور حقل الملف (id="fileInput" كما في الكود الخاص بك)
-        await page.waitForSelector('#fileInput', { timeout: 15000 });
-        
-        console.log('Uploading file...');
-        const fileInput = await page.$('#fileInput');
+        // استراحة بسيطة للسماح لجوجل بتحميل الإطار المخفي
+        await new Promise(r => setTimeout(r, 5000)); 
+
+        console.log('5. Searching for Google iframe...');
+        let targetFrame = null;
+        for (const frame of page.frames()) {
+            // البحث عن الإطار الذي يحتوي على زر الرفع
+            if (await frame.$('#fileInput')) {
+                targetFrame = frame;
+                break;
+            }
+        }
+
+        if (!targetFrame) throw new Error("لم يتم العثور على إطار الرفع الخاص بجوجل.");
+
+        console.log('6. Uploading file...');
+        // التعامل مع الإطار مباشرة
+        await targetFrame.waitForSelector('#fileInput', { timeout: 15000 });
+        const fileInput = await targetFrame.$('#fileInput');
         await fileInput.uploadFile(fullFilePath);
         
-        // الضغط على زر بدء الرفع (id="btnUpload")
-        await page.click('#btnUpload');
+        // الضغط على زر بدء الرفع
+        await targetFrame.click('#btnUpload');
         
-        console.log('Waiting for processing (10 seconds)...');
+        console.log('7. Waiting for processing (10 seconds)...');
         await new Promise(r => setTimeout(r, 10000));
 
         console.log('✅ Operation Completed Successfully!');
