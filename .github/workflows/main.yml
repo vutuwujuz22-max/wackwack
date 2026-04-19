@@ -1,0 +1,26 @@
+name: Dynamic Bosa Bot
+on:
+  workflow_dispatch: 
+  schedule:
+    - cron: '0 12 * * *' # يعمل مرة واحدة ظهراً كمثال
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Dependencies
+        run: PUPPETEER_SKIP_DOWNLOAD=true npm install
+
+      - name: Execute Bot
+        # هنا يتم ربط الأسرار بالسكربت
+        env:
+          BOSAT_USER: ${{ secrets.BOSAT_USER }}
+          BOSAT_PASS: ${{ secrets.BOSAT_PASS }}
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          CLIENT_NAME: ${{ secrets.CLIENT_NAME }}
+        run: node index.js
