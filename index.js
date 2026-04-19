@@ -27,6 +27,15 @@ const CONFIG = {
     });
 
     const page = await browser.newPage();
+    
+    // ==========================================
+    // حل مشكلة التعليق: اصطياد تنبيهات بوسطة
+    // ==========================================
+    page.on('dialog', async dialog => {
+        console.log('⚠️ تنبيه من بوسطة:', dialog.message());
+        await dialog.accept(); 
+    });
+
     const client = await page.target().createCDPSession();
     await client.send('Page.setDownloadBehavior', {
         behavior: 'allow',
@@ -55,9 +64,6 @@ const CONFIG = {
         });
         await new Promise(r => setTimeout(r, 2000));
 
-        // ==========================================
-        // الجزء الذي تمت إضافته: إدخال التواريخ
-        // ==========================================
         console.log('3. Setting Date Range...');
         const today = new Date();
         const endDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
@@ -76,7 +82,6 @@ const CONFIG = {
             }
         }, startDate, endDate);
         await new Promise(r => setTimeout(r, 1500));
-        // ==========================================
 
         console.log('4. Generating report and downloading...');
         await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs')?.click());
@@ -86,15 +91,16 @@ const CONFIG = {
             try { printFunc('FollowUpOrdersXlsRep'); } catch(e) {}
         });
 
+        // زيادة وقت انتظار التحميل لـ 90 ثانية 
         let downloadedFile = null;
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 45; i++) {
             const files = fs.readdirSync(downloadPath);
-            downloadedFile = files.find(f => (f.endsWith('.xls') || f.endsWith('.xlsx')) && !f.endsWith('.crdownload'));
+            downloadedFile = files.find(f => (f.endsWith('.xls') || f.endsWith('.xlsx') || f.endsWith('.csv')) && !f.endsWith('.crdownload'));
             if (downloadedFile) break;
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (!downloadedFile) throw new Error('Download failed or took too long.');
+        if (!downloadedFile) throw new Error('Download failed or took too long. تأكد أن العميل له أوردرات في هذا التاريخ.');
         const fullFilePath = path.join(downloadPath, downloadedFile);
         console.log(`✅ File ready: ${downloadedFile}`);
 
