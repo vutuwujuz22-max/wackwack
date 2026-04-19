@@ -23,9 +23,6 @@ const CONFIG = {
     const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
 
-    // =====================================================
-    // 🚨 أجهزة التصنت على موقع بوسطة (صياد الأخطاء الداخلي)
-    // =====================================================
     page.on('console', msg => {
         if(msg.type() === 'error' || msg.type() === 'warning') 
             console.log('💻 [رسالة من داخل بوسطة]:', msg.text());
@@ -55,12 +52,24 @@ const CONFIG = {
         await page.type('#ArMainContent_UcFollowUpOrdersReport_TxtSearchClient', CONFIG.clientName);
         await new Promise(r => setTimeout(r, 3000));
         
+        // =========================================================
+        // التعديل: استهداف أيقونة التحميل البنفسجية في صف العميل
+        // =========================================================
+        console.log('جاري محاولة اختيار العميل من القائمة...');
         const clientSelected = await page.evaluate(() => {
-            const firstClient = document.querySelector('a[id*="LnkSetClient"]');
-            if (firstClient) { firstClient.click(); return true; }
+            // البحث عن كل الروابط التي تحتوي على أيقونة التحميل
+            const links = Array.from(document.querySelectorAll('a[id*="LnkSetClient"]'));
+            // اختيار أول رابط مرئي (بعد الفلترة بالبحث)
+            for (let link of links) {
+                // التأكد من أن العنصر و/أو الأيقونة مرئية
+                if (link.offsetParent !== null) {
+                    link.click();
+                    return true;
+                }
+            }
             return false;
         });
-        console.log(clientSelected ? '✅ تم الضغط على العميل في البحث.' : '❌ عطل: لم يتم العثور على العميل!');
+        console.log(clientSelected ? '✅ تم الضغط على أيقونة العميل.' : '❌ عطل: لم يتم العثور على أيقونة العميل المرئية!');
         await new Promise(r => setTimeout(r, 2000));
 
         console.log('3. إدخال التواريخ (من الشهر الماضي لليوم)...');
@@ -92,7 +101,6 @@ const CONFIG = {
         console.log(execClicked ? '✅ تم الضغط، انتظار 10 ثواني لتحميل الجدول...' : '❌ عطل: زر إظهار النتائج غير موجود!');
         await new Promise(r => setTimeout(r, 10000));
 
-        // فحص هل الموقع أظهر رسالة "لا توجد بيانات"
         const noData = await page.evaluate(() => {
             const text = document.body.innerText;
             return text.includes('لا توجد بيانات') || text.includes('No records') || text.includes('لا يوجد');
