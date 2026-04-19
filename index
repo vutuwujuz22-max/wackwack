@@ -1,26 +1,78 @@
-name: Dynamic Bosa Bot
-on:
-  workflow_dispatch: 
-  schedule:
-    - cron: '0 12 * * *' # يعمل مرة واحدة ظهراً كمثال
+const puppeteer = require('puppeteer');
+const path = require('path');
+const fs = require('fs');
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+// استدعاء البيانات المخفية من جيت هاب
+const CONFIG = {
+    user: process.env.BOSAT_USER,
+    pass: process.env.BOSAT_PASS,
+    uploadUrl: process.env.UPLOAD_URL,
+    targetClient: process.env.CLIENT_NAME || 'العميل الجديد' // افتراضي إذا نسيته
+};
 
-      - name: Install Dependencies
-        run: PUPPETEER_SKIP_DOWNLOAD=true npm install
+(async () => {
+    const downloadPath = path.resolve(__dirname, 'downloads');
+    if (!fs.existsSync(downloadPath)) fs.mkdirSync(downloadPath);
 
-      - name: Execute Bot
-        # هنا يتم ربط الأسرار بالسكربت
-        env:
-          BOSAT_USER: ${{ secrets.BOSAT_USER }}
-          BOSAT_PASS: ${{ secrets.BOSAT_PASS }}
-          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
-          CLIENT_NAME: ${{ secrets.CLIENT_NAME }}
-        run: node index.js
+    const browser = await puppeteer.launch({
+        headless: true,
+        executablePath: '/usr/bin/google-chrome',
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    const client = await page.target().createCDPSession();
+    await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
+
+    try {
+        console.log('🚀 بدء العملية - الدخول لبوسطة...');
+        await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle2' });
+
+        // تسجيل الدخول باستخدام السرية
+        await page.type('input[type="text"]', CONFIG.user);
+        await page.type('input[type="password"]', CONFIG.pass);
+        await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
+
+        console.log(`🔍 البحث عن العميل: ${CONFIG.targetClient}`);
+        await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
+        
+        // كود البحث عن العميل الجديد
+        await page.evaluate(() => document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Lnkpopclient')?.click());
+        await new Promise(r => setTimeout(r, 2000));
+        await page.type('#ArMainContent_UcFollowUpOrdersReport_TxtSearchClient', CONFIG.targetClient);
+        await new Promise(r => setTimeout(r, 3000));
+        
+        // اختيار أول نتيجة تظهر للعميل الجديد
+        await page.evaluate(() => {
+            const firstResult = document.querySelector('a[id*="LnkSetClient"]');
+            if (firstResult) firstResult.click();
+        });
+
+        // استكمال خطوات التاريخ والتحميل (نفس الكود السابق)
+        // ... (هنا تضع كود استخراج التواريخ والتحميل الذي شرحناه سابقاً) ...
+
+        console.log('📤 الرفع للموقع الجديد (بدون باسورد)...');
+        await page.goto(CONFIG.uploadUrl, { waitUntil: 'networkidle2' });
+        
+        // البحث عن حقل الرفع مباشرة
+        const fileInput = await page.$('input[type="file"]'); 
+        if (fileInput) {
+            const files = fs.readdirSync(downloadPath);
+            const targetFile = files.find(f => f.endsWith('.xls') || f.endsWith('.xlsx'));
+            await fileInput.uploadFile(path.join(downloadPath, targetFile));
+            
+            // الضغط على زر الإرسال (تأكد من الـ Selector في الموقع الجديد)
+            await page.evaluate(() => {
+                const submitBtn = document.querySelector('button[type="submit"]') || document.querySelector('#uploadBtn');
+                if (submitBtn) submitBtn.click();
+            });
+            console.log('✅ تم الرفع بنجاح!');
+        }
+
+    } catch (error) {
+        console.error('❌ حدث خطأ:', error.message);
+        process.exit(1);
+    } finally {
+        await browser.close();
+    }
+})();
